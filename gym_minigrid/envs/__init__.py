@@ -19,3 +19,6 @@ from gym_minigrid.envs.crossing import *
 from gym_minigrid.envs.lavagap import *
 from gym_minigrid.envs.dynamicobstacles import *
 from gym_minigrid.envs.distshift import *
+from gym_minigrid.envs.emptygoal import *
+from gym_minigrid.envs.fourcorridors import *
+from gym_minigrid.envs.emptynogoal import *

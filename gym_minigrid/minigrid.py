@@ -58,6 +58,8 @@ STATE_TO_IDX = {
     'locked': 2,
 }
 
+IDX_TO_STATE = dict(zip(STATE_TO_IDX.values(), STATE_TO_IDX.keys()))
+
 # Map of agent direction indices to vectors
 DIR_TO_VEC = [
     # Pointing right (positive X)
@@ -678,7 +680,8 @@ class MiniGridEnv(gym.Env):
             dtype='uint8'
         )
         self.observation_space = spaces.Dict({
-            'image': self.observation_space
+            'image': self.observation_space,
+            'mission': spaces.Space()
         })
 
         # Range of possible rewards

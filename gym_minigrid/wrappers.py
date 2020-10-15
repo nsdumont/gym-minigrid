@@ -5,7 +5,9 @@ from functools import reduce
 import numpy as np
 import gym
 from gym import error, spaces, utils
-from .minigrid import OBJECT_TO_IDX, COLOR_TO_IDX, STATE_TO_IDX
+from .minigrid import OBJECT_TO_IDX, COLOR_TO_IDX, STATE_TO_IDX, IDX_TO_OBJECT, IDX_TO_COLOR, IDX_TO_STATE
+import nengo_spa as spa
+import nengo_ssp as ssp
 
 class ReseedWrapper(gym.core.Wrapper):
     """
@@ -355,3 +357,192 @@ class DirectionObsWrapper(gym.core.ObservationWrapper):
         slope = np.divide( self.goal_position[1] - self.agent_pos[1] ,  self.goal_position[0] - self.agent_pos[0])
         obs['goal_direction'] = np.arctan( slope ) if self.type == 'angle' else slope
         return obs
+    
+
+class SSPGoalWrapper(SSPWrapper):
+    """
+    Provides the slope/angular direction to the goal with the observations as modeled by (y2 - y2 )/( x2 - x1)
+    type = {slope , angle}
+    """
+    def __init__(self,  env,d,X=None,Y=None,delta=2,rng=None):
+        super().__init__(env,d,X,Y,delta,rng)
+        self.goal_position = None
+
+    def reset(self):
+        obs = self.env.reset()
+        if not self.goal_position:
+            self.goal_position = [x for x,y in enumerate(self.grid.grid) if isinstance(y,(Goal) ) ]
+            if len(self.goal_position) >= 1: # in case there are multiple goals , needs to be handled for other env types
+                self.goal_position = (int(self.goal_position[0]/self.height) , self.goal_position[0]%self.width)
+        return obs
+
+    def observation(self, obs):
+        goal_ssp = self.X**self.goal_position[0] * self.Y**self.goal_position[1]
+        agent_ssp = self.X**self.agent_pos[0] * self.Y**self.agent_pos[1]
+        obs['goal_similarity'] = np.sum(goal_ssp.v.real * agent_ssp.v.real)
+        return obs
+    
+    
+class SSPGoalBonus(gym.core.Wrapper):
+    """
+    Adds an exploration bonus based on which positions
+    are visited on the grid.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.counts = {}
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+
+        # Tuple based on which we index the counts
+        # We use the position after an update
+        env = self.unwrapped
+        tup = (tuple(env.agent_pos))
+
+        # Get the count for this key
+        pre_count = 0
+        if tup in self.counts:
+            pre_count = self.counts[tup]
+
+        # Update the count for this key
+        new_count = pre_count + 1
+        self.counts[tup] = new_count
+
+        bonus = 1 / math.sqrt(new_count)
+        reward += bonus
+
+        return obs, reward, done, info
+
+    def reset(self, **kwargs):
+        return self.env.reset(**kwargs)
+
+
+class SSPWrapper(gym.core.ObservationWrapper):
+
+    def __init__(self, env,d,X=None,Y=None,delta=2,rng=None):
+        super().__init__(env)
+        
+        self.alg = spa.algebras.HrrAlgebra()
+
+        img_shape = env.observation_space['image'].shape
+        self.img_shape = img_shape
+        self.d = d
+        self.X = X or ssp.vector_generation.UnitaryVectors(d)
+        self.Y = Y or ssp.vector_generation.UnitaryVectors(d)
+        
+        colors = [x.upper() for x in list(COLOR_TO_IDX.keys())]
+        
+        pointer_gen = spa.vector_generation.UnitaryVectors(self.d, self.alg, rng=rng)
+        vocab = spa.Vocabulary(d, pointer_gen = pointer_gen)
+        vocab.add('NULL', np.zeros(d))
+        vocab.populate(';'.join(colors))
+        
+        objects = [x.upper() for x in list(OBJECT_TO_IDX.keys())]
+        vocab.populate(';'.join(objects))
+        
+        #states = [x.upper() for x in list(STATE_TO_IDX.keys())]
+        #vocab.populate(';'.join(states))
+        vocab.add('OPEN',  self.alg.identity_element(d))
+        vocab.populate('CLOSED;LOCKED')
+        self.vocab = vocab
+            
+
+        obs_shape = (d,)
+
+        self.observation_space.spaces["image"] = SSPSpace(
+            basis=[self.X,self.Y],
+            radius=1,
+            shape=(obs_shape[0],)
+        )
+        
+        # delta = 4
+        # S_rec = ssp.spatial_semantic_pointer.SpatialSemanticPointer(data=np.zeros(d))
+        # for i in np.linspace(0,delta,50):
+        #     for j in np.linspace(0,delta,50):
+        #         S_rec += self.X**i * self.Y**j
+        # S_rec= S_rec.normalized()
+        # self.S_rec = S_rec
+        self.delta = delta
+        xi = np.linspace(0,delta,50)
+        yi = np.linspace(-(delta//2),delta//2,50)
+        xxi,yyi = np.meshgrid(xi,yi)
+        Srecs = ssp.utils.ssp_vectorized(np.vstack([self.X.v, self.Y.v]).T, np.vstack([xxi.reshape(-1), yyi.reshape(-1)]).T)
+        S_rec = ssp.SpatialSemanticPointer(data= np.sum(Srecs, axis=1))
+        S_rec= S_rec.normalized()
+        self.S_rec = S_rec
+
+        
+        
+        xi = np.arange(img_shape[0] - 0.5,0,-1)*delta - (delta//2)
+        yi = np.arange(img_shape[1]//2, -img_shape[1]//2, -1)*delta
+        xx,yy = np.meshgrid(xi,yi)
+        basisv = np.vstack([self.X.v, self.Y.v]).T
+        positions = np.vstack([xx.reshape(-1), yy.reshape(-1)]).T
+        S_ids = ssp.utils.ssp_vectorized(basisv, positions).T.real
+        S_list_rec = np.zeros(S_ids.shape)
+        for i in np.arange(S_ids.shape[0]):
+            S_list_rec[i,:] = (S_rec * ssp.SpatialSemanticPointer(data=S_ids[i,:])).normalized().v.real
+        
+        self.S_list = S_ids.reshape(len(xi),len(yi),d)
+        self.S_list_rec = S_list_rec.reshape(len(xi),len(yi),d)
+
+    def observation(self, obs):
+        img = obs['image']
+        
+        # M = spa.SemanticPointer(data=np.zeros(self.d))
+        # for i in range(img.shape[0]):
+        #     for j in range(img.shape[1]):
+        #         obj = img[i, j, 0]
+        #         color = img[i, j, 1]
+        #         state = img[i, j, 2]
+        #         if obj not in [0,1]:                    
+        #             #S = spa.SemanticPointer(data=self.S_list[i,j,:])
+        #             S = spa.SemanticPointer(data=self.S_list_rec[i,j,:])
+        #             M = M + ( S * self.vocab[IDX_TO_OBJECT[obj].upper()] * self.vocab[IDX_TO_COLOR[color].upper()] * self.vocab[IDX_TO_STATE[state].upper()])
+       
+        M = spa.SemanticPointer(data=np.zeros(self.d))
+        allobjs = np.unique(img[:,:,0])
+        # It doesn't save info about tiles that are 'unseen', 'emtpy', or floors
+        allobjs = np.delete(allobjs,np.where((allobjs== 0) | (allobjs ==1) | (allobjs ==3)))
+        for i in allobjs:
+            obj = i
+            idxs = np.where(img[:,:,0]==i)
+            
+            S = spa.SemanticPointer(data = np.sum(self.S_list_rec[idxs[0],idxs[1],:],axis=0))
+            S = S.normalized()
+            M = M + ( S * self.vocab[IDX_TO_OBJECT[obj].upper()])
+        #M = M.normalized()
+
+        return {
+            'mission': obs['mission'],
+            'image': M.v
+        }
+    
+class SSPSpace(gym.spaces.Space):
+    def __init__(self, basis, radius, shape=None, dtype=complex, alg = spa.algebras.HrrAlgebra()):
+        self.nbasis = len(basis)
+        self.basis = basis
+        self.dim = len(basis[0].v)
+        self.shape = basis[0].v.shape
+        self.radius = radius
+        self.alg = alg
+        self.seed()
+        self.dist = ssp.dists.UniformSSPs(basis,self.alg,self.radius)
+
+    def sample(self):   
+        return self.dist.sample(1)
+
+    
+    def samples(self,n):
+        return self.dist.sample(n)
+              
+
+    def contains(self, x):
+        """
+        Return boolean specifying if x is a valid
+        member of this space
+        """
+        # need more to assure its a real SSP - ie on right torus
+        return ((type(x) == spa.SemanticPointer) | (type(x) == ssp.SpatialSemanticPointer) ) & (len(x) == self.dim)

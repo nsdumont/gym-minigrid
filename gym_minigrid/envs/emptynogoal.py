@@ -39,7 +39,7 @@ class EmptyNoGoalEnv(MiniGridEnv):
         else:
             self.place_agent()
 
-        #self.mission = "get to the green goal square"
+        self.mission = "explore"
 
 class EmptyNoGoalEnv5x5(EmptyNoGoalEnv):
     def __init__(self, **kwargs):

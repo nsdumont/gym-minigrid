@@ -359,28 +359,6 @@ class DirectionObsWrapper(gym.core.ObservationWrapper):
         return obs
     
 
-class SSPGoalWrapper(SSPWrapper):
-    """
-    Provides the slope/angular direction to the goal with the observations as modeled by (y2 - y2 )/( x2 - x1)
-    type = {slope , angle}
-    """
-    def __init__(self,  env,d,X=None,Y=None,delta=2,rng=None):
-        super().__init__(env,d,X,Y,delta,rng)
-        self.goal_position = None
-
-    def reset(self):
-        obs = self.env.reset()
-        if not self.goal_position:
-            self.goal_position = [x for x,y in enumerate(self.grid.grid) if isinstance(y,(Goal) ) ]
-            if len(self.goal_position) >= 1: # in case there are multiple goals , needs to be handled for other env types
-                self.goal_position = (int(self.goal_position[0]/self.height) , self.goal_position[0]%self.width)
-        return obs
-
-    def observation(self, obs):
-        goal_ssp = self.X**self.goal_position[0] * self.Y**self.goal_position[1]
-        agent_ssp = self.X**self.agent_pos[0] * self.Y**self.agent_pos[1]
-        obs['goal_similarity'] = np.sum(goal_ssp.v.real * agent_ssp.v.real)
-        return obs
     
     
 class SSPGoalBonus(gym.core.Wrapper):
@@ -519,6 +497,31 @@ class SSPWrapper(gym.core.ObservationWrapper):
             'mission': obs['mission'],
             'image': M.v
         }
+    
+    
+
+class SSPGoalWrapper(SSPWrapper):
+    """
+    Provides the slope/angular direction to the goal with the observations as modeled by (y2 - y2 )/( x2 - x1)
+    type = {slope , angle}
+    """
+    def __init__(self,  env,d,X=None,Y=None,delta=2,rng=None):
+        super().__init__(env,d,X,Y,delta,rng)
+        self.goal_position = None
+
+    def reset(self):
+        obs = self.env.reset()
+        if not self.goal_position:
+            self.goal_position = [x for x,y in enumerate(self.grid.grid) if isinstance(y,(Goal) ) ]
+            if len(self.goal_position) >= 1: # in case there are multiple goals , needs to be handled for other env types
+                self.goal_position = (int(self.goal_position[0]/self.height) , self.goal_position[0]%self.width)
+        return obs
+
+    def observation(self, obs):
+        goal_ssp = self.X**self.goal_position[0] * self.Y**self.goal_position[1]
+        agent_ssp = self.X**self.agent_pos[0] * self.Y**self.agent_pos[1]
+        obs['goal_similarity'] = np.sum(goal_ssp.v.real * agent_ssp.v.real)
+        return obs
     
 class SSPSpace(gym.spaces.Space):
     def __init__(self, basis, radius, shape=None, dtype=complex, alg = spa.algebras.HrrAlgebra()):

@@ -9,6 +9,8 @@ setup(
     packages=['gym_minigrid', 'gym_minigrid.envs'],
     install_requires=[
         'gym>=0.9.6',
-        'numpy>=1.15.0'
+        'numpy>=1.15.0',
+        'nengo_spa>=1.0.1',
+        'nengo_ssp>=0.1.0'
     ]
 )

@@ -5,7 +5,7 @@ from functools import reduce
 import numpy as np
 import gym
 from gym import error, spaces, utils
-from .minigrid import OBJECT_TO_IDX, COLOR_TO_IDX, STATE_TO_IDX, IDX_TO_OBJECT, IDX_TO_COLOR, IDX_TO_STATE
+from .minigrid import OBJECT_TO_IDX, COLOR_TO_IDX, STATE_TO_IDX, IDX_TO_OBJECT, IDX_TO_COLOR, IDX_TO_STATE,DIR_TO_VEC
 import nengo_spa as spa
 import nengo_ssp as ssp
 
@@ -413,17 +413,20 @@ class SSPWrapper(gym.core.ObservationWrapper):
         colors = [x.upper() for x in list(COLOR_TO_IDX.keys())]
         
         pointer_gen = spa.vector_generation.UnitaryVectors(self.d, self.alg, rng=rng)
-        vocab = spa.Vocabulary(d, pointer_gen = pointer_gen)
-        vocab.add('NULL', np.zeros(d))
-        vocab.populate(';'.join(colors))
-        
         objects = [x.upper() for x in list(OBJECT_TO_IDX.keys())]
-        vocab.populate(';'.join(objects))
+
+        vocab = spa.Vocabulary(d, pointer_gen = pointer_gen)
+        vocab.populate(';'.join(colors + objects ))
+        vocab.add('NULL', np.zeros(d))
+        vocab.add('OPEN',  self.alg.identity_element(d))
+        #vocab.populate('CLOSED;LOCKED')
+
+        
+        #vocab.populate(';'.join(objects))
         
         #states = [x.upper() for x in list(STATE_TO_IDX.keys())]
         #vocab.populate(';'.join(states))
-        vocab.add('OPEN',  self.alg.identity_element(d))
-        vocab.populate('CLOSED;LOCKED')
+        #vocab.populate('AGENT')
         self.vocab = vocab
             
 
@@ -492,13 +495,59 @@ class SSPWrapper(gym.core.ObservationWrapper):
             S = S.normalized()
             M = M + ( S * self.vocab[IDX_TO_OBJECT[obj].upper()])
         #M = M.normalized()
-
+        
+        #agent_ssp = self.X**(self.delta*self.agent_pos[0]) * self.Y**(self.delta*self.agent_pos[1])
+        #M = M * agent_ssp
         return {
             'mission': obs['mission'],
             'image': M.v
         }
     
-    
+ 
+class SSPWrapper2(gym.core.ObservationWrapper):
+
+    def __init__(self, env,d,X=None,Y=None,delta=2,rng=None):
+        super().__init__(env)
+        
+        self.alg = spa.algebras.HrrAlgebra()
+
+        img_shape = env.observation_space['image'].shape
+        self.img_shape = img_shape
+        self.d = d
+        self.X = X or ssp.vector_generation.UnitaryVectors(d)
+        self.Y = Y or ssp.vector_generation.UnitaryVectors(d)
+        
+        
+        pointer_gen = spa.vector_generation.UnitaryVectors(self.d, self.alg, rng=rng)
+
+        vocab = spa.Vocabulary(d, pointer_gen = pointer_gen)
+        vocab.populate('POSITION;DIRECTION')
+        self.vocab = vocab
+            
+
+        obs_shape = (d,)
+
+        self.observation_space.spaces["image"] = SSPSpace(
+            basis=[self.X,self.Y],
+            radius=1,
+            shape=(obs_shape[0],)
+        )
+        
+
+        
+
+    def observation(self, obs):
+        #img = obs['image']
+        
+        agent_ssp = self.X**(self.agent_pos[0]) * self.Y**(self.agent_pos[1])
+        dir_ssp = self.X**(DIR_TO_VEC[self.agent_dir][0]) * self.Y**(DIR_TO_VEC[self.agent_dir][1])
+
+        M = (self.vocab['POSITION'] * agent_ssp) + (self.vocab['DIRECTION'] * dir_ssp)
+        return {
+            'mission': obs['mission'],
+            'image': M.v
+        }
+       
 
 class SSPGoalWrapper(SSPWrapper):
     """
